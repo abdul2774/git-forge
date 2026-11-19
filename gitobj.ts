@@ -292,6 +292,84 @@ export function mergeBase(map: ObjectMap, a: string, b: string): string | null {
   return null;
 }
 
+// ---------------------------------------------------------------- fetch computation
+
+export interface FetchComputation {
+  /** Object ids to pack and send. */
+  send: string[];
+  /** Boundary commits to name with `shallow` lines in shallow-info. */
+  shallow: string[];
+  /** Previously-shallow commits whose parents are now included (`unshallow` lines). */
+  unshallow: string[];
+  /** Haves the server holds (for ACK lines). */
+  common: string[];
+}
+
+/**
+ * The upload-pack set arithmetic. The send set is the wants' closure minus the haves' closure;
+ * the haves' closure never crosses the parents of a client-declared shallow boundary commit.
+ * With a depth, commit generations count from the wants (generation 1): commits at the depth
+ * limit that still have parents in the full graph become the new shallow boundary.
+ */
+export function computeFetch(
+  map: ObjectMap,
+  wants: readonly string[],
+  haves: readonly string[],
+  shallowList: readonly string[],
+  depth: number | null,
+): FetchComputation {
+  const shallowSet = new Set(shallowList);
+  const haveSet = reachable(map, haves, shallowSet);
+
+  // Generation of every commit reachable from the wants (1 = a want), capped by the depth.
+  const generations = new Map<string, number>();
+  const queue: string[] = [];
+  const seed = (oid: string, gen: number): void => {
+    const known = generations.get(oid);
+    if (known === undefined || gen < known) {
+      generations.set(oid, gen);
+      queue.push(oid);
+    }
+  };
+  const extraObjects = new Set<string>();
+  for (const want of wants) {
+    const object = map.get(want);
+    if (object === undefined) continue;
+    if (object.type === 'commit') seed(want, 1);
+    else if (object.type === 'tag') {
+      extraObjects.add(want);
+      seed(peelToNonTag(map, want), 1);
+    } else {
+      for (const oid of reachable(map, [want])) extraObjects.add(oid);
+    }
+  }
+  while (queue.length > 0) {
+    const oid = queue.shift() as string;
+    const gen = generations.get(oid) as number;
+    const object = map.get(oid);
+    if (object === undefined || object.type !== 'commit') continue;
+    if (depth !== null && gen >= depth) continue;
+    for (const parent of parseCommit(object.data).parents) seed(parent, gen + 1);
+  }
+
+  const wantObjects = new Set<string>(extraObjects);
+  const boundary = new Set<string>();
+  const unshallow = new Set<string>();
+  for (const [oid, gen] of generations) {
+    wantObjects.add(oid);
+    const object = map.get(oid);
+    if (object === undefined || object.type !== 'commit') continue;
+    const commit = parseCommit(object.data);
+    for (const treeOid of reachable(map, [commit.tree])) wantObjects.add(treeOid);
+    if (depth !== null && gen === depth && commit.parents.length > 0) boundary.add(oid);
+    if (shallowSet.has(oid) && (depth === null || gen < depth)) unshallow.add(oid);
+  }
+
+  const send = [...wantObjects].filter((oid) => !haveSet.has(oid));
+  const common = haves.filter((have) => map.has(have));
+  return { send, shallow: [...boundary], unshallow: [...unshallow], common };
+}
+
 // ---------------------------------------------------------------- diffs and merges
 
 export interface FileChange {
