@@ -9,6 +9,8 @@
     "node": ">=22.18"
   },
   "scripts": {
-    "start": "node --experimental-strip-types main.ts"
+    "start": "node --experimental-strip-types main.ts",
+    "test": "bash tools/run-checks.sh",
+    "bench": "bash tools/run-checks.sh --perf"
   }
 }
