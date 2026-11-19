@@ -1,10 +1,16 @@
-# github-core-clone-01 starter
+# git-forge — a GitHub-compatible git forge in one Node process
 
-A runnable starting point for [the contest](https://make.fun/bounty/github-core-clone-01): the entry's
-HTTP server and the lifecycle the harness drives it with. It answers two routes and a JSON 404 for
-everything else, so it boots and registers but passes almost nothing: the git smart-HTTP server, the
-REST v3 resources, GraphQL v4 and the MCP endpoint are the contest, and this is where you start
-building them.
+[![make.fun bounty](https://make.fun/badge/github-core-clone-01.svg)](https://make.fun/bounty/github-core-clone-01)
+[![rank](https://make.fun/badge/github-core-clone-01/abdul2774/git-forge/rank.svg)](https://make.fun/bounty/github-core-clone-01)
+[![reward](https://make.fun/badge/github-core-clone-01/abdul2774/git-forge/reward.svg)](https://make.fun/bounty/github-core-clone-01)
+
+An entry for [the github-core-clone-01 bounty](https://make.fun/bounty/github-core-clone-01) on
+[make.fun](https://make.fun/bounty/github-core-clone-01): a single-process, dependency-free
+GitHub-compatible forge. It serves git smart HTTP (protocol v2 and v0), the REST v3 resources,
+GraphQL v4 and an MCP endpoint from one in-memory store — no database, no `git` binary, Node
+standard library only. The code is split by surface (`githttp.ts`, `rest.ts`, `graphql.ts`,
+`mcp.ts`) over a shared store (`store.ts`, `domain.ts`, `gitobj.ts`); the contract it is built
+against lives in [AGENTS.md](AGENTS.md).
 
 ## Run it
 
@@ -14,8 +20,18 @@ node --experimental-strip-types main.ts
 
 The platform runs `node /bot/main.ts` on Node 22.18 or later, which strips TypeScript types on its
 own; the flag is harmless there and makes an older local Node work too. There is nothing to install:
-the program imports `node:http` and its own `app.ts` only, and the trial has no package manager and
+the program imports `node:http` and its own modules only, and the trial has no package manager and
 no internet.
+
+## Check it locally
+
+```sh
+npm test        # the full 120-check conformance suite against a fresh forge process
+npm run bench   # the same, plus the four timed workloads (push, clone, read, write)
+```
+
+Both wrap the competition kit's own suite runner via `tools/run-checks.sh` (set `FORGE_KIT_DIR`
+if the kit lives somewhere else).
 
 ## The lifecycle (main.ts)
 
@@ -30,7 +46,7 @@ The env is a server the harness starts beside yours. Its origin is in `MAKEFUN_E
    then on. The first register wins: a later one is answered `409` and does not move the base URL.
 3. **Wait for done.** `GET $MAKEFUN_ENV_URL/done` answers at once with `{"done":false}` while the
    suite runs and `{"done":true}` once its export is written. Poll it with a short backoff; never
-   hold a request open, and never exit before it says `true`.
+   hold the request open, and never exit before it says `true`.
 4. **Exit 0** when it does. Closing the server first is tidy; the harness stops the env afterwards,
    and the env's export is what the scorer reads.
 
@@ -51,7 +67,7 @@ there is nothing to talk to, so `main.ts` exits 1 at once.
 
 The env presents every API call with `Authorization: Bearer $MAKEFUN_SHOP_TOKEN` (the same token is
 in your environment); `/healthz` is the boot probe and takes none. Whether a missing or a wrong token
-is refused is part of the protocol checks, not of this starter.
+is refused is part of the protocol checks.
 
 The score is `feature + agent + perf` (0..1000): the conformance checks over that surface, the MCP
 checks again as the agent-native column, and four timed workloads. The version of the suite the trial
@@ -69,7 +85,12 @@ The trial's CPU, memory and process limits are the rules'; its wall budget is 90
 ## Layout
 
 - `main.ts`: the lifecycle above. Keep it as it is.
-- `app.ts`: the server. This is the file to grow.
+- `app.ts`: composition — builds the HTTP server from the parts.
+- `web.ts`: HTTP plumbing: routing, JSON in/out, headers.
+- `store.ts`: the in-memory store (repos, issues, pulls, objects).
+- `domain.ts`: shared domain logic used by more than one surface.
+- `gitobj.ts`: the git object model and packfile read/write.
+- `githttp.ts`: git smart HTTP: advertisement, upload-pack, receive-pack.
+- `rest.ts`: REST v3. `graphql.ts`: GraphQL v4. `mcp.ts`: the MCP endpoint.
+- `tools/`: the local conformance/perf harness (`npm test`, `npm run bench`).
 - `package.json`, `tsconfig.json`, `LICENSE` (MIT): the entry's metadata and licence.
-
-The starter is MIT licensed; a submitted entry must carry an OSI-approved licence of its own.
