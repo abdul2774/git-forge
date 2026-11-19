@@ -106,9 +106,11 @@ Each workload scores 25 points at its reference time `T_ref` and 50 at
 | read | 2,000 GETs of one issue on keep-alive | 2760 ms |
 | write | 200 issue POSTs | 349 ms |
 
-The caching shape that holds these numbers: pack bytes cached per
-tip/send-set (the clone storm re-sends identical packs), the serialised
-issue body cached for the read workload, and O(1) issue insertion.
+The caching shape that holds these numbers: assembled upload-pack
+responses cached per fetch argument tuple and pack bytes cached per
+tip/send-set (the clone storm re-sends identical requests), the serialised
+issue body cached for the read workload, and O(1) issue insertion. Both
+git caches clear on any repository write (`touchRepo`).
 
 ## Test loop
 

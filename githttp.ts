@@ -272,8 +272,29 @@ function packForSendSet(repo: RepoRec, cacheKey: string, send: readonly string[]
   return pack;
 }
 
+/** The cache key for an assembled fetch response: the full argument tuple decides the bytes. */
+function fetchCacheKey(prefix: string, args: FetchArgs): string {
+  return `${prefix}|d=${args.depth ?? 'full'}|w=${args.wants.join(',')}|h=${args.haves.join(',')}|s=${args.shallow.join(',')}|done=${args.done ? 1 : 0}`;
+}
+
+/** Replay a cached fetch response, or return false when this exact request was never served. */
+function replayFetch(ctx: WebCtx, repo: RepoRec, key: string): boolean {
+  const cached = repo.fetchCache.get(key);
+  if (cached === undefined) return false;
+  sendBytes(ctx, 200, cached, 'application/x-git-upload-pack-result');
+  return true;
+}
+
+/** Remember an assembled fetch response (bounded: the cache resets rather than growing past 128). */
+function rememberFetch(repo: RepoRec, key: string, body: Buffer): void {
+  if (repo.fetchCache.size >= 128) repo.fetchCache.clear();
+  repo.fetchCache.set(key, body);
+}
+
 function fetchV2(ctx: WebCtx, repo: RepoRec, lines: readonly string[]): void {
   const args = parseFetchArgs(lines);
+  const cacheKey = fetchCacheKey('v2', args);
+  if (replayFetch(ctx, repo, cacheKey)) return;
   const computed = computeFetch(repo.objects, args.wants, args.haves, args.shallow, args.depth);
   const sections: Buffer[][] = [];
 
@@ -294,8 +315,8 @@ function fetchV2(ctx: WebCtx, repo: RepoRec, lines: readonly string[]): void {
     sections.push(infoLines.map((line) => pktLine(`${line}\n`)));
   }
   if (computed.send.length > 0) {
-    const cacheKey = `v2|${args.depth ?? 'full'}|${[...computed.send].sort().join(',')}`;
-    const pack = packForSendSet(repo, cacheKey, computed.send);
+    const packKey = `v2|${args.depth ?? 'full'}|${[...computed.send].sort().join(',')}`;
+    const pack = packForSendSet(repo, packKey, computed.send);
     sections.push([pktLine('packfile\n'), ...sidebandPackets(pack)]);
   }
 
@@ -305,13 +326,17 @@ function fetchV2(ctx: WebCtx, repo: RepoRec, lines: readonly string[]): void {
     parts.push(index === sections.length - 1 ? FLUSH : DELIM);
   });
   if (sections.length === 0) parts.push(FLUSH);
-  sendBytes(ctx, 200, Buffer.concat(parts), 'application/x-git-upload-pack-result');
+  const body = Buffer.concat(parts);
+  rememberFetch(repo, cacheKey, body);
+  sendBytes(ctx, 200, body, 'application/x-git-upload-pack-result');
 }
 
 function fetchV0(ctx: WebCtx, repo: RepoRec, frames: readonly PktFrame[]): void {
   // Rebuild the two request sections from the raw frames: wants first, haves after the flush.
   const texts = frames.filter((frame) => frame.kind === 'data').map(frameText);
   const args = parseFetchArgs(texts);
+  const cacheKey = fetchCacheKey('v0', args);
+  if (replayFetch(ctx, repo, cacheKey)) return;
   const computed = computeFetch(repo.objects, args.wants, args.haves, args.shallow, args.depth);
   const parts: Buffer[] = [];
   if (computed.common.length > 0) {
@@ -322,12 +347,14 @@ function fetchV0(ctx: WebCtx, repo: RepoRec, frames: readonly PktFrame[]): void 
   for (const oid of computed.shallow) parts.push(pktLine(`shallow ${oid}\n`));
   for (const oid of computed.unshallow) parts.push(pktLine(`unshallow ${oid}\n`));
   if (computed.send.length > 0) {
-    const cacheKey = `v0|${args.depth ?? 'full'}|${[...computed.send].sort().join(',')}`;
-    const pack = packForSendSet(repo, cacheKey, computed.send);
+    const packKey = `v0|${args.depth ?? 'full'}|${[...computed.send].sort().join(',')}`;
+    const pack = packForSendSet(repo, packKey, computed.send);
     parts.push(...sidebandPackets(pack));
   }
   parts.push(FLUSH);
-  sendBytes(ctx, 200, Buffer.concat(parts), 'application/x-git-upload-pack-result');
+  const body = Buffer.concat(parts);
+  rememberFetch(repo, cacheKey, body);
+  sendBytes(ctx, 200, body, 'application/x-git-upload-pack-result');
 }
 
 // ---------------------------------------------------------------- receive-pack

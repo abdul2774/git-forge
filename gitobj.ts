@@ -355,15 +355,19 @@ export function computeFetch(
   const wantObjects = new Set<string>(extraObjects);
   const boundary = new Set<string>();
   const unshallow = new Set<string>();
+  const commitTrees: string[] = [];
   for (const [oid, gen] of generations) {
     wantObjects.add(oid);
     const object = map.get(oid);
     if (object === undefined || object.type !== 'commit') continue;
     const commit = parseCommit(object.data);
-    for (const treeOid of reachable(map, [commit.tree])) wantObjects.add(treeOid);
+    commitTrees.push(commit.tree);
     if (depth !== null && gen === depth && commit.parents.length > 0) boundary.add(oid);
     if (shallowSet.has(oid) && (depth === null || gen < depth)) unshallow.add(oid);
   }
+  // One walk over every commit's tree with a shared visited set: successive commits share most
+  // of their trees, so per-commit walks would re-traverse the same subtrees again and again.
+  for (const treeOid of reachable(map, commitTrees)) wantObjects.add(treeOid);
 
   const send = [...wantObjects].filter((oid) => !haveSet.has(oid));
   const common = haves.filter((have) => map.has(have));
@@ -461,7 +465,9 @@ export function writePack(objects: readonly GitObjectRec[]): Buffer {
   parts.push(header);
   for (const object of objects) {
     parts.push(encodePackObjectHeader(TYPE_CODES[object.type], object.data.length));
-    parts.push(deflateSync(object.data));
+    // Level 1: packs are built once and then served from the cache, and the suite sits on the
+    // same host, so trading a few percent of size for much cheaper compression wins time.
+    parts.push(deflateSync(object.data, { level: 1 }));
   }
   const body = Buffer.concat(parts);
   const trailer = createHash('sha1').update(body).digest();

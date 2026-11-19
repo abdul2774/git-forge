@@ -65,6 +65,11 @@ export interface RepoRec {
   issueBodyCache: Map<number, string>;
   /** Built pack bytes for shallow fetches, keyed by want/depth (the clone workload). */
   packCache: Map<string, Buffer>;
+  /** Assembled upload-pack response bodies, keyed by the full fetch argument tuple. A fetch
+   *  response is a pure function of (wants, haves, shallow, depth) over content-addressed
+   *  objects, so identical requests (the clone storm) replay byte-identically; cleared with
+   *  the pack cache whenever the repository's objects or refs change. */
+  fetchCache: Map<string, Buffer>;
 }
 
 /** The token owner: the suite's seeded scenario fixes this identity. */
@@ -142,6 +147,7 @@ export class Store {
       createdSeq: this.repoSeq,
       issueBodyCache: new Map(),
       packCache: new Map(),
+      fetchCache: new Map(),
     };
     this.repos.set(key, repo);
     return repo;
@@ -178,6 +184,7 @@ export class Store {
   /** Invalidate every cached serialisation a repository write could have changed. */
   touchRepo(repo: RepoRec): void {
     repo.packCache.clear();
+    repo.fetchCache.clear();
   }
 
   touchIssue(repo: RepoRec, issue: IssueRec): void {
