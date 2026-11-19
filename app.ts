@@ -1,49 +1,64 @@
-// The starter's HTTP surface, exactly as it ships: a health probe and an API root, and a JSON 404
-// for everything else. The contest's real surface — git smart HTTP, REST v3 resources, GraphQL v4 and
-// the MCP endpoint — is what you add (README.md names it, and the rules link below says what scores).
-//
-// app.ts is deliberately separate from main.ts: this is the server, the file you grow; main.ts is the
-// entry <-> env lifecycle and should stay as it is.
+// The forge's HTTP surface: a health probe, REST v3 (/api/v3), GraphQL (/api/graphql), the MCP
+// endpoint (/mcp) and git smart HTTP (/{owner}/{repo}.git/...), all over one shared in-memory
+// store. app.ts only routes; each surface lives in its own module. main.ts is the entry <-> env
+// lifecycle and stays exactly as the starter ships it.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { handleGitHttp } from './githttp.ts';
+import { handleGraphql } from './graphql.ts';
+import { handleMcp } from './mcp.ts';
+import { handleRest, segmentsOf } from './rest.ts';
+import { store } from './store.ts';
+import { makeCtx, sendError, sendJson, type WebCtx } from './web.ts';
 
-const JSON_TYPE = 'application/json; charset=utf-8';
+async function dispatch(ctx: WebCtx): Promise<void> {
+  const { method, path } = ctx;
 
-/** Answer one request with a JSON body; `headers` go beside the JSON ones. */
-function sendJson(res: ServerResponse, status: number, body: unknown, headers: Readonly<Record<string, string>> = {}): void {
-  const text = `${JSON.stringify(body)}\n`;
-  res.writeHead(status, { 'content-type': JSON_TYPE, 'content-length': Buffer.byteLength(text), ...headers });
-  res.end(text);
-}
-
-/** The path of a request URL, or '/' when it does not parse (never a throw from a request). */
-function pathOf(req: IncomingMessage): string {
-  try {
-    return new URL(req.url ?? '/', 'http://entry').pathname;
-  } catch {
-    return '/';
+  // The env's boot check calls this twice: 200 {"ok":true}.
+  if (method === 'GET' && path === '/healthz') {
+    sendJson(ctx, 200, { ok: true });
+    return;
   }
+
+  if (path === '/api/v3' || path.startsWith('/api/v3/')) {
+    await handleRest(ctx, segmentsOf(path.slice('/api/v3'.length)));
+    return;
+  }
+
+  if (path === '/api/graphql' && method === 'POST') {
+    await handleGraphql(ctx);
+    return;
+  }
+
+  if (path === '/mcp' && method === 'POST') {
+    await handleMcp(ctx);
+    return;
+  }
+
+  // Git smart HTTP: /{owner}/{repo}.git/{info/refs,git-upload-pack,git-receive-pack}.
+  const segments = segmentsOf(path);
+  if (segments.length >= 3 && (segments[1] as string).endsWith('.git')) {
+    const owner = segments[0] as string;
+    const repoName = (segments[1] as string).slice(0, -'.git'.length);
+    await handleGitHttp(ctx, owner, repoName, segments.slice(2));
+    return;
+  }
+
+  sendError(ctx, 404, 'Not Found');
 }
 
 /** Build the server. It binds nothing until the caller listens; the entry listens on an ephemeral port. */
 export function createApp(): Server {
   return createServer((req: IncomingMessage, res: ServerResponse) => {
-    const path = pathOf(req);
-    const method = req.method ?? 'GET';
-
-    // The env's boot check calls this twice: 200 {"ok":true}.
-    if (method === 'GET' && path === '/healthz') {
-      sendJson(res, 200, { ok: true });
-      return;
-    }
-
-    // The GitHub API root: a 200 with the token's scopes, as api.github.com answers GET /.
-    if (method === 'GET' && (path === '/api/v3' || path === '/api/v3/')) {
-      sendJson(res, 200, { current_user_url: '/api/v3/user', rate_limit_url: '/api/v3/rate_limit' }, { 'x-oauth-scopes': 'repo, read:org' });
-      return;
-    }
-
-    // Everything else, every method: GitHub's 404 body.
-    sendJson(res, 404, { message: 'Not Found' });
+    const ctx = makeCtx(req, res, store);
+    dispatch(ctx).catch(() => {
+      // A handler failure must still answer in JSON, never hang or crash the process.
+      try {
+        if (!res.headersSent) sendError(ctx, 500, 'Internal Server Error');
+        else if (!res.writableEnded) res.end();
+      } catch {
+        // The socket is already gone; nothing more to do.
+      }
+    });
   });
 }
