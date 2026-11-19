@@ -11,9 +11,12 @@ optional. Read this file before changing anything.
 
 ## Entrypoint contract
 
-- `main.ts` is the competition starter's lifecycle file. **Never modify it.**
-  It binds an ephemeral port (`listen(0)`, never 8080), POSTs `{"port"}` to
-  `$MAKEFUN_ENV_URL/register`, polls `GET $MAKEFUN_ENV_URL/done`, and exits 0.
+- `main.ts` is the entrypoint's lifecycle implementation, maintained in
+  this repository. It binds an ephemeral port (`listen(0)`, never 8080),
+  POSTs `{"port"}` to `$MAKEFUN_ENV_URL/register`, polls
+  `GET $MAKEFUN_ENV_URL/done`, and exits 0; with `MAKEFUN_ENV_URL` unset
+  it exits 1 at once. Edit it like any other module — what must not change
+  is the lifecycle behavior just described.
 - Boot budget is 20 s to register; `GET /healthz` must answer 200
   `{"ok": true}`.
 - `/bot` (this repository at the entered commit) is **read-only** in the
@@ -58,7 +61,7 @@ optional. Read this file before changing anything.
 
 | file | owns |
 |---|---|
-| `main.ts` | trial lifecycle (immutable, see above) |
+| `main.ts` | trial lifecycle (see the entrypoint contract above) |
 | `app.ts` | composition: builds the HTTP server from the parts |
 | `web.ts` | HTTP plumbing: routing, JSON in/out, headers |
 | `store.ts` | the in-memory store (repos, issues, pulls, objects) |

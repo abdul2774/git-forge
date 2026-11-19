@@ -84,7 +84,7 @@ The trial's CPU, memory and process limits are the rules'; its wall budget is 90
 
 ## Layout
 
-- `main.ts`: the lifecycle above. Keep it as it is.
+- `main.ts`: the lifecycle implementation described above.
 - `app.ts`: composition — builds the HTTP server from the parts.
 - `web.ts`: HTTP plumbing: routing, JSON in/out, headers.
 - `store.ts`: the in-memory store (repos, issues, pulls, objects).
